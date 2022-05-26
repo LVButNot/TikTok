@@ -1,4 +1,4 @@
-module github.com/RaymondCode/simple-demo
+module github.com/LVButNot/TikTok
 
 go 1.17
 
