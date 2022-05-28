@@ -64,7 +64,7 @@ func Register(c *gin.Context) {
 	} else {
 
 		newUser := User{
-			//Id:            userIdSequence,
+
 			Name:          username,
 			FollowCount:   0,
 			FollowerCount: 0,
@@ -73,7 +73,7 @@ func Register(c *gin.Context) {
 
 		GLOBAL_DB.Create(&newUser)
 		newUserInfo := UserInfoTab{
-			//UserId:   userID,
+
 			Name:     username,
 			Password: pasmd5,
 			Token:    tok,
