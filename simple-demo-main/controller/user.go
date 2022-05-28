@@ -32,27 +32,52 @@ type UserResponse struct {
 	User User `json:"user"`
 }
 
+//从客户端接受username和password，然后先确认数据库里存不存在这个用户，若存在，返回"User already exist"；若不存在，将username和password、token保存到数据库中，userid自增1
+
 func Register(c *gin.Context) {
+	//获取请求参数
 	username := c.Query("username")
 	password := c.Query("password")
-
 	token := username + password
+	//连接数据库,封装在controller.utils包下
+	ConnectionSQL()
+	_ = GLOBAL_DB.AutoMigrate(&UserInfoTab{})
+	//对password和token进行加密
+	np := md5.Sum([]byte(token))
+	tok := fmt.Sprintf("%X", np)
+	fmt.Println(tok)
+	pas := md5.Sum([]byte(password))
+	pasmd5 := fmt.Sprintf("%X", pas)
+	fmt.Println(pasmd5)
+	//通过username从user_info_tabs表中查询数据
+	var uit UserInfoTab
+	find := GLOBAL_DB.Where("name = ?", username).Find(&uit)
 
-	if _, exist := usersLoginInfo[token]; exist {
+	if find.RowsAffected != 0 {
 		c.JSON(http.StatusOK, UserLoginResponse{
-			Response: Response{StatusCode: 1, StatusMsg: "User already exist"},
+			Response: Response{StatusCode: 1, StatusMsg: "用户已存在"},
 		})
 	} else {
 		atomic.AddInt64(&userIdSequence, 1)
 		newUser := User{
-			Id:   userIdSequence,
-			Name: username,
+			Id:            userIdSequence,
+			Name:          username,
+			FollowCount:   0,
+			FollowerCount: 0,
+			IsFollow:      false,
 		}
-		usersLoginInfo[token] = newUser
+		GLOBAL_DB.Create(&newUser)
+		newUserInfo := UserInfoTab{
+			UserId:   userIdSequence,
+			Name:     username,
+			Password: pasmd5,
+			Token:    tok,
+		}
+		GLOBAL_DB.Create(&newUserInfo)
 		c.JSON(http.StatusOK, UserLoginResponse{
 			Response: Response{StatusCode: 0},
 			UserId:   userIdSequence,
-			Token:    username + password,
+			Token:    tok,
 		})
 	}
 }
