@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"net/http"
-	"sync/atomic"
 )
 
 //这个usersLoginInfo是demo里测试用的，应该删掉，但是用户注册接口还没有完成，为了不爆红先留着，注册功能完成后删掉。
@@ -19,8 +18,6 @@ var usersLoginInfo = map[string]User{
 	},
 }
 
-var userIdSequence = int64(1)
-
 type UserLoginResponse struct {
 	Response
 	UserId int64  `json:"user_id,omitempty"`
@@ -32,38 +29,64 @@ type UserResponse struct {
 	User User `json:"user"`
 }
 
-func Register(c *gin.Context) {
-	username := c.Query("username")
-	password := c.Query("password")
-
-	token := username + password
-
-	if _, exist := usersLoginInfo[token]; exist {
-		c.JSON(http.StatusOK, UserLoginResponse{
-			Response: Response{StatusCode: 1, StatusMsg: "User already exist"},
-		})
-	} else {
-		atomic.AddInt64(&userIdSequence, 1)
-		newUser := User{
-			Id:   userIdSequence,
-			Name: username,
-		}
-		usersLoginInfo[token] = newUser
-		c.JSON(http.StatusOK, UserLoginResponse{
-			Response: Response{StatusCode: 0},
-			UserId:   userIdSequence,
-			Token:    username + password,
-		})
-	}
-}
-
 // UserInfoTab
 //		对应数据库里的user_info_tabs表，用来存放用户的登录信息。
 type UserInfoTab struct {
-	UserId   int64
+	UserId   int64 `json:"userid,omitempty" gorm:"primary_key;type:bigint(20);not null;auto_increment"`
 	Name     string
 	Password string
 	Token    string
+}
+
+func Register(c *gin.Context) {
+	//获取请求参数
+	username := c.Query("username")
+	password := c.Query("password")
+	token := username + password
+	//连接数据库,封装在controller.utils包下
+	ConnectionSQL()
+	_ = GLOBAL_DB.AutoMigrate(&UserInfoTab{})
+	//对password和token进行加密
+	np := md5.Sum([]byte(token))
+	tok := fmt.Sprintf("%X", np)
+	//fmt.Println(tok)
+	pas := md5.Sum([]byte(password))
+	pasmd5 := fmt.Sprintf("%X", pas)
+	//fmt.Println(pasmd5)
+	//通过username从user_info_tabs表中查询数据
+	var uit UserInfoTab
+	find := GLOBAL_DB.Where("name = ?", username).Find(&uit)
+
+	if find.RowsAffected != 0 {
+		c.JSON(http.StatusOK, UserLoginResponse{
+			Response: Response{StatusCode: 1, StatusMsg: "用户已存在"},
+		})
+	} else {
+
+		newUser := User{
+			//Id:            userIdSequence,
+			Name:          username,
+			FollowCount:   0,
+			FollowerCount: 0,
+			IsFollow:      false,
+		}
+
+		GLOBAL_DB.Create(&newUser)
+		newUserInfo := UserInfoTab{
+			//UserId:   userID,
+			Name:     username,
+			Password: pasmd5,
+			Token:    tok,
+		}
+		userID := newUser.Id
+
+		GLOBAL_DB.Create(&newUserInfo)
+		c.JSON(http.StatusOK, UserLoginResponse{
+			Response: Response{StatusCode: 0},
+			UserId:   userID,
+			Token:    tok,
+		})
+	}
 }
 
 func Login(c *gin.Context) {
