@@ -24,7 +24,7 @@ type Comment struct {
 }
 
 type User struct {
-	Id            int64  `json:"id,omitempty"`
+	Id            int64  `json:"id,omitempty" gorm:"primary_key;type:bigint(20);not null;auto_increment" `
 	Name          string `json:"name,omitempty"`
 	FollowCount   int64  `json:"follow_count,omitempty"`
 	FollowerCount int64  `json:"follower_count,omitempty"`
