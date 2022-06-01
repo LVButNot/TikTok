@@ -17,6 +17,12 @@ type CommentActionResponse struct {
 
 // CommentAction no practical effect, just check if token is valid
 func CommentAction(c *gin.Context) {
+	//comments表（新建）
+	//comment表里有commentId、videoId、userId、commentContent、createTime
+	//如果actionType=1，数据库添加评论；如果actionType=0，数据库删除评论
+	//额外：实现线程锁解决并发问题
+
+	//下面这个是原demo，我没有修改，做的时候删掉
 	token := c.Query("token")
 	actionType := c.Query("action_type")
 
@@ -40,8 +46,6 @@ func CommentAction(c *gin.Context) {
 
 // CommentList all videos have same demo comment list
 func CommentList(c *gin.Context) {
-	c.JSON(http.StatusOK, CommentListResponse{
-		Response:    Response{StatusCode: 0},
-		CommentList: DemoComments,
-	})
+	//第一步，验证用户的那一套（注意这里只给了token，所以直接在user_info_tabs里面用token查，然后判断*gorm.DB.RowsAffected是否为0）（RowsAffected返回查到了几条数据）
+	//第二步，通过videoId在comment表中查询响应中的数据，然后发送响应即可
 }

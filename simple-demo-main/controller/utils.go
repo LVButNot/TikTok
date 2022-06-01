@@ -2,11 +2,13 @@ package controller
 
 import (
 	"fmt"
+	"github.com/go-redis/redis"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
 
 var GLOBAL_DB *gorm.DB
+var RDB *redis.Client
 
 func ConnectionSQL() {
 	dsn := "root:wulingwei@tcp(175.178.126.39:3306)/tiktok?charset=utf8mb4&parseTime=True&loc=Local"
@@ -18,4 +20,18 @@ func ConnectionSQL() {
 		fmt.Println(db)
 	}
 	GLOBAL_DB = db
+}
+
+func ConnectionRedis() (err error) {
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     "175.178.126.39",
+		Password: "wulingwei",
+		DB:       0,
+	})
+	_, err = rdb.Ping().Result()
+	if err != nil {
+		return err
+	}
+	RDB = rdb
+	return err
 }
