@@ -2,7 +2,9 @@ package controller
 
 import (
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"net/http"
+	"strconv"
 )
 
 type UserListResponse struct {
@@ -13,160 +15,114 @@ type UserListResponse struct {
 // RelationAction no practical effect, just check if token is valid
 func RelationAction(c *gin.Context) {
 
-	userId := c.PostForm("user_id")
-	token := c.PostForm("token")
-	toUserId := c.PostForm("to_user_id")
-	actionType := c.PostForm("action_type")
+	token := c.Query("token")
+	sToUserId := c.Query("to_user_id")
+	toUserId, _ := strconv.ParseInt(sToUserId, 10, 64)
+	actionType := c.Query("action_type")
 
 	ConnectionSQL()
-	_ = GLOBAL_DB.AutoMigrate(&User{})
-	//初始化一个UserInfoTab
-	var user User
-	//通过userId在User表里查询token并与请求参数中的token比对
-	verification := GLOBAL_DB.Select("token").Where("id = ?", userId).Find(&user)
-	if verification.Error != nil {
-		c.JSON(http.StatusInternalServerError, Response{StatusCode: 1, StatusMsg: "服务器内部错误"})
+	if token == "" {
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 1,
+			StatusMsg:  "用户信息不存在",
+		})
 	}
-	if user.Token != token {
-		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "用户不存在"})
-	} else {
-		//新建一个relations表
-		//表中要有userId、toUserId
-		//若actionType为1，在relation表中添加数据,同时在user表使userid对应用户的followCount + 1，toUserId对应用户的followerCount + 1
-		//反之，在relation表中删除一条数据（取关），同时在user表使userid对应用户的followCount - 1，toUserId对应用户的followerCount - 1
-		//问题：isFollow怎么解决，不太理解
-		//用线程锁解决并发问题，用户在同时点击时不能出现数据错误
-		err := ConnectionRedis2()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, Response{StatusCode: 1, StatusMsg: "连接Redis数据库出错"})
+	if actionType == "1" {
+		var user User
+		GLOBAL_DB.Where("token=?", token).First(&user)
+		relation := Relation{
+			UserAId: user.Id,
+			UserBId: toUserId,
 		}
-
-		err1 := ConnectionRedis3()
-		if err1 != nil {
-			c.JSON(http.StatusInternalServerError, Response{StatusCode: 1, StatusMsg: "连接Redis数据库出错"})
-		}
-		if actionType == "1" {
-			RDB2.SAdd(userId, toUserId)
-			RDB3.SAdd(toUserId, userId)
-			//在user表中使userid的followCount + 1,to_user_id的followerCount + 1
-			user := User{}
-			GLOBAL_DB.Where("id = ", userId).Take(&user)
-			user.FollowCount += 1
-			GLOBAL_DB.Save(user)
-
-			toUser := User{}
-			GLOBAL_DB.Where("id = ", toUserId).Take(&toUser)
-			toUser.FollowerCount += 1
-			GLOBAL_DB.Save(toUser)
-
-			c.JSON(http.StatusOK, Response{StatusCode: 0, StatusMsg: "关注成功"})
-		} else if actionType == "2" {
-			RDB2.SRem(userId, toUserId)
-			RDB3.SRem(toUserId, userId)
-			//在user表中使userid的followCount - 1,to_user_id的followerCount - 1
-			user := User{}
-			GLOBAL_DB.Where("id = ", userId).Take(&user)
-			user.FollowCount -= 1
-			GLOBAL_DB.Save(user)
-
-			toUser := User{}
-			GLOBAL_DB.Where("id = ", toUserId).Take(&toUser)
-			toUser.FollowerCount -= 1
-			GLOBAL_DB.Save(toUser)
-			c.JSON(http.StatusOK, Response{StatusCode: 0, StatusMsg: "取关成功"})
-		}
-
+		GLOBAL_DB.Transaction(func(tx *gorm.DB) error {
+			// 创建关注关系
+			if err := tx.Create(&relation).Error; err != nil {
+				// 返回任何错误都会回滚事务
+				return err
+			}
+			// 增加关注数、被关注数
+			tx.Model(&User{}).Where("id=?", user.Id).UpdateColumn("follow_count", gorm.Expr("follow_count + ?", 1))
+			tx.Model(&User{}).Where("id=?", toUserId).UpdateColumn("follower_count", gorm.Expr("follower_count + ?", 1))
+			// 返回 nil 提交事务
+			return nil
+		})
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 0,
+			StatusMsg:  "关注成功",
+		})
+	} else if actionType == "2" {
+		var user User
+		GLOBAL_DB.Where("token = ?", token).First(&user)
+		GLOBAL_DB.Transaction(func(tx *gorm.DB) error {
+			// 删除关注关系
+			if err := tx.Where("user_a_id=?", user.Id).Where("user_b_id=?", toUserId).Delete(&Relation{}).Error; err != nil {
+				// 返回任何错误都会回滚事务
+				return err
+			}
+			// 减少关注数、被关注数
+			tx.Model(&User{}).Where("id=?", user.Id).UpdateColumn("follow_count", gorm.Expr("follow_count - ?", 1))
+			tx.Model(&User{}).Where("id=?", toUserId).UpdateColumn("follower_count", gorm.Expr("follower_count - ?", 1))
+			// 返回 nil 提交事务
+			return nil
+		})
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 0,
+			StatusMsg:  "取关成功",
+		})
 	}
 }
 
-// FollowList all users have same follow list
 func FollowList(c *gin.Context) {
 
-	userId := c.Query("user_id")
 	token := c.Query("token")
-
 	ConnectionSQL()
-	_ = GLOBAL_DB.AutoMigrate(&User{})
-	//初始化一个User和一个VideoListResponse
+	if token == "" {
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 1,
+			StatusMsg:  "用户信息不匹配",
+		})
+	}
 	var user User
-	ulr := UserListResponse{Response{1, ""}, []User{}}
-	//通过userId在UserInfoTab表里查询token并与请求参数中的token比对
-	verification := GLOBAL_DB.Select("token").Where("id = ?", userId).Find(&user)
-	if verification.Error != nil {
-		ulr.Response.StatusCode = 1
-		ulr.Response.StatusMsg = "服务器内部错误"
-		c.JSON(http.StatusInternalServerError, &ulr)
+	GLOBAL_DB.Where("token=?", token).First(&user)
+	var followList []Relation
+	// 加载 UserB 即加载当前用户关注的用户
+	GLOBAL_DB.Preload("UserB").Where("user_a_id=?", user.Id).Find(&followList)
+	// 这里直接暴力复制了，不知道 Go 语言有无更好的方法可以提取结构体数组中的元素
+	followUserList := make([]User, len(followList))
+	for i, f := range followList {
+		followUserList[i] = f.UserB
 	}
-	if user.Token != token {
-		ulr.Response.StatusCode = 1
-		ulr.Response.StatusMsg = "用户不存在"
-		c.JSON(http.StatusOK, &ulr)
-	} else {
-		//用userId作为relation表中的userId，查询toUserId数据，作为userList返回
-		err := ConnectionRedis2()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, UserListResponse{Response{StatusCode: 1, StatusMsg: "Redis连接失败"}, []User{}})
-		}
-		finds, _ := RDB2.SMembers(userId).Result()
-		var userList []User
-		for _, find := range finds {
-			var user User
-			verification = GLOBAL_DB.Select("name").Where("id = ", find).Take(&user)
-			if verification != nil {
-				ulr.Response.StatusCode = 1
-				ulr.Response.StatusMsg = "查询出现错误"
-				c.JSON(http.StatusInternalServerError, &ulr)
-			}
-
-			userList = append(userList, user)
-		}
-		c.JSON(http.StatusOK, UserListResponse{Response{StatusCode: 0, StatusMsg: "拉取成功"}, userList})
-	}
+	c.JSON(http.StatusOK, UserListResponse{
+		Response: Response{
+			StatusCode: 0,
+		},
+		UserList: followUserList,
+	})
 }
 
-// FollowerList all users have same follower list
 func FollowerList(c *gin.Context) {
-	//查询toUserId数据，作为userList返回
-	//问题：返回的列表里是不是应该存放username而不是userid，如何实现。
-
-	userId := c.Query("user_id")
 	token := c.Query("token")
-
 	ConnectionSQL()
-	_ = GLOBAL_DB.AutoMigrate(&User{})
-	//初始化一个User和一个VideoListResponse
+	if token == "" {
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 1,
+			StatusMsg:  "用户信息不匹配",
+		})
+	}
 	var user User
-	ulr := UserListResponse{Response{1, ""}, []User{}}
-	//通过userId在UserInfoTab表里查询token并与请求参数中的token比对
-	verification := GLOBAL_DB.Select("token").Where("id = ?", userId).Find(&user)
-	if verification.Error != nil {
-		ulr.Response.StatusCode = 1
-		ulr.Response.StatusMsg = "服务器内部错误"
-		c.JSON(http.StatusInternalServerError, &ulr)
-	}
-	if user.Token != token {
-		ulr.Response.StatusCode = 1
-		ulr.Response.StatusMsg = "用户不存在"
-		c.JSON(http.StatusOK, &ulr)
-	} else {
-		//查询toUserId数据，作为userList返回
-		err := ConnectionRedis3()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, UserListResponse{Response{StatusCode: 1, StatusMsg: "Redis连接失败"}, []User{}})
-		}
-		finds, _ := RDB3.SMembers(userId).Result()
-		var userList []User
-		for _, find := range finds {
-			var user User
-			verification = GLOBAL_DB.Select("name").Where("id = ", find).Take(&user)
-			if verification != nil {
-				ulr.Response.StatusCode = 1
-				ulr.Response.StatusMsg = "查询出现错误"
-				c.JSON(http.StatusInternalServerError, &ulr)
-			}
+	GLOBAL_DB.Where("token=?", token).First(&user)
+	var followerList []Relation
+	// 加载 UserA 即加载当前用户的粉丝
+	GLOBAL_DB.Preload("UserA").Where("user_b_id=?", user.Id).Find(&followerList)
 
-			userList = append(userList, user)
-		}
-		c.JSON(http.StatusOK, UserListResponse{Response{StatusCode: 0, StatusMsg: "拉取成功"}, userList})
+	followerUserList := make([]User, len(followerList))
+	for i, f := range followerList {
+		followerUserList[i] = f.UserA
 	}
+	c.JSON(http.StatusOK, UserListResponse{
+		Response: Response{
+			StatusCode: 0,
+		},
+		UserList: followerUserList,
+	})
 }

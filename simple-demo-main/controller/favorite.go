@@ -2,112 +2,92 @@ package controller
 
 import (
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 	"net/http"
+	"strconv"
 )
 
 // FavoriteAction no practical effect, just check if token is valid
 func FavoriteAction(c *gin.Context) {
-	userId := c.PostForm("user_id")
-	token := c.PostForm("token")
-	videoId := c.PostForm("video_id")
-	actionType := c.PostForm("action_type")
-
+	sUserId := c.Query("user_id")
+	userId, _ := strconv.ParseInt(sUserId, 10, 64)
+	token := c.Query("token")
+	sVideoId := c.Query("video_id")
+	actionType := c.Query("action_type")
+	videoId, _ := strconv.ParseInt(sVideoId, 10, 64)
 	ConnectionSQL()
-	_ = GLOBAL_DB.AutoMigrate(&User{})
-	//初始化一个User
-	var user User
-	//通过userId在UserInfoTab表里查询token并与请求参数中的token比对
-	verification := GLOBAL_DB.Select("token").Where("id = ?", userId).Find(&user)
-	if verification.Error != nil {
-		c.JSON(http.StatusInternalServerError, Response{StatusCode: 1, StatusMsg: "服务器内部错误"})
+
+	if token == "" {
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 1,
+			StatusMsg:  "用户信息不匹配",
+		})
 	}
-	if user.Token != token {
-		c.JSON(http.StatusOK, Response{StatusCode: 1, StatusMsg: "用户不存在"})
-	} else {
-		/*两张表：videos表和favorite表
-		 *favorite表存放用户id和视频id
-		 *若用户未曾点赞，则在favorite表中增加一条数据，同时在video表中使favoriteCount + 1
-		 *若点赞过，则删除这条数据（即取消点赞），同时在video表中使favoriteCount — 1
-		 *
-		 *需要解决的问题：
-		 *用线程锁解决并发问题，用户在同时点击时不能出现增加或减少等数据错误
-		 *在video表中还有一列is_favorite数据，如何处理
-		 */
-		err := ConnectionRedis()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, &Response{StatusCode: 1, StatusMsg: "Redis查询失败"})
-		}
-		if actionType == "1" {
-			//在favorite表中增加一条数据
-			RDB.SAdd(userId, videoId)
+	if actionType == "1" {
+		var user User
+		GLOBAL_DB.Where("token=?", token).First(&user)
 
-			//在video表中使favoriteCount + 1
-			video := Video{}
-			GLOBAL_DB.Where("id = ", videoId).Take(&video)
-			video.FavoriteCount += 1
-			GLOBAL_DB.Save(video)
-			c.JSON(http.StatusOK, Response{StatusCode: 0, StatusMsg: "点赞成功"})
-		} else if actionType == "2" {
-			//在favorite表中删除一条数据
-			RDB.SRem(userId, videoId)
-
-			//在video表中使favoriteCount - 1
-			video := Video{}
-			GLOBAL_DB.Where("id = ", videoId).Take(&video)
-			video.FavoriteCount -= 1
-			GLOBAL_DB.Save(video)
-			c.JSON(http.StatusOK, Response{StatusCode: 0, StatusMsg: "取消成功"})
+		//在favorites添加记录
+		favorite := Favorite{
+			UserId:  user.Id,
+			VideoId: videoId,
 		}
+
+		//开启数据库事务，在favorites中添加记录，在videos中更改点赞数目
+		GLOBAL_DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(&favorite).Error; err != nil {
+				// 返回任何错误都会回滚事务
+				return err
+			}
+			tx.Model(&Video{}).Where("id=?", videoId).UpdateColumn("favorite_count", gorm.Expr("favorite_count + ?", 1))
+			// 返回 nil 提交事务
+			return nil
+		})
+		c.JSON(http.StatusOK, Response{StatusCode: 0, StatusMsg: "点赞成功"})
+
+	} else if actionType == "2" {
+		GLOBAL_DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("user_id=?", userId).Where("video_id=?", videoId).Delete(&Favorite{}).Error; err != nil {
+				// 返回任何错误都会回滚事务
+				return err
+			}
+			tx.Model(&Video{}).Where("id=?", videoId).UpdateColumn("favorite_count", gorm.Expr("favorite_count - ?", 1))
+			// 返回 nil 提交事务
+			return nil
+		})
+
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 0,
+			StatusMsg:  "取消成功",
+		})
 	}
 }
 
 // FavoriteList all users have same favorite video list
 func FavoriteList(c *gin.Context) {
-	userId := c.Query("user_id")
+	sUserId := c.Query("user_id")
+	userId, _ := strconv.ParseInt(sUserId, 10, 64)
 	token := c.Query("token")
 
 	ConnectionSQL()
-	_ = GLOBAL_DB.AutoMigrate(&User{})
-	//初始化一个UserInfoTab和一个VideoListResponse
-	var user User
-	vlr := VideoListResponse{Response{1, ""}, []Video{}}
-	//通过userId在UserInfoTab表里查询token并与请求参数中的token比对
-	verification := GLOBAL_DB.Select("token").Where("id = ?", userId).Find(&user)
-	if verification.Error != nil {
-		vlr.Response.StatusCode = 1
-		vlr.Response.StatusMsg = "服务器内部错误"
-		c.JSON(http.StatusInternalServerError, &vlr)
+	if token == "" {
+		c.JSON(http.StatusOK, Response{
+			StatusCode: 1,
+			StatusMsg:  "You haven't logged in yet",
+		})
 	}
-	if user.Token != token {
-		vlr.Response.StatusCode = 1
-		vlr.Response.StatusMsg = "用户不存在"
-		c.JSON(http.StatusOK, &vlr)
-	} else {
-		//favorite表中通过userid查询到当前用户所有的点赞视频并作为响应返回
-		//修改一下video表，该表目前还缺一个user数据，外键关联。
-		err := ConnectionRedis()
-		if err != nil {
-			vlr.Response.StatusCode = 1
-			vlr.Response.StatusMsg = "Redis查询失败"
-			c.JSON(http.StatusInternalServerError, &vlr)
-		}
+	var favoriteList []Favorite
+	var videoList []Video
+	GLOBAL_DB.Where("user_id=?", userId).Find(&favoriteList)
 
-		finds, err := RDB.SMembers(userId).Result()
-		var videoList []Video
-		for _, find := range finds {
-			var video Video
-			verification := GLOBAL_DB.Where("id = ?", find).Find(&video)
-			if verification.Error != nil {
-				vlr.Response.StatusCode = 1
-				vlr.Response.StatusMsg = "服务器内部错误"
-				c.JSON(http.StatusInternalServerError, &vlr)
-			}
+	GLOBAL_DB.Table("favorites").Select("favorites.video_id,videos.*").
+		Where("favorites.user_id=?", userId).
+		Joins("LEFT JOIN videos ON favorites.video_id = videos.id").
+		Find(&videoList)
 
-			videoList = append(videoList, video)
-		}
-		vlr.Response.StatusCode = 0
-		vlr.Response.StatusMsg = "拉取成功"
-		vlr.VideoList = videoList
-		c.JSON(http.StatusOK, &vlr)
-	}
+	c.JSON(http.StatusOK, FeedResponse{
+		Response:  Response{StatusCode: 0, StatusMsg: "拉取成功"},
+		VideoList: videoList,
+	})
+
 }
