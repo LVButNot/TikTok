@@ -42,7 +42,7 @@ func Publish(c *gin.Context) {
 	GLOBAL_DB.Where("token=?", token).Find(&user)
 	nowTime := time.Now().Unix()
 	finalName := fmt.Sprintf("%d_%d_%s", user.Id, nowTime, filename)
-	saveFile := filepath.Join(".", "public", finalName+".mp4")
+	saveFile := filepath.Join("./public", finalName+".mp4")
 	if err := c.SaveUploadedFile(data, saveFile); err != nil {
 		c.JSON(http.StatusOK, Response{
 			StatusCode: 1,
@@ -50,14 +50,14 @@ func Publish(c *gin.Context) {
 		})
 	}
 
-	snapshotPath := GetSnapshot(saveFile, "", 1)
+	GetSnapshot(saveFile, "", 1)
 
 	//制作video对象，存入数据库
 	video := Video{
 		Author:   user,
 		UserId:   user.Id,
-		PlayUrl:  saveFile,
-		CoverUrl: snapshotPath,
+		PlayUrl:  "http://175.178.126.39:8080/static/" + finalName + ".mp4",
+		CoverUrl: "http://175.178.126.39:8080/static/" + finalName + ".jpeg",
 		Title:    title,
 	}
 	if err := GLOBAL_DB.Create(&video).Error; err != nil {
