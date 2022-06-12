@@ -44,12 +44,12 @@ func GetSnapshot(videoPath, snapshotPath string, frameNum int) (snapshotName str
 		log.Fatal("生成缩略图失败：", err)
 	}
 	if len(snapshotPath) == 0 {
-		paths, fileName := filepath.Split(videoPath)
+		_, fileName := filepath.Split(videoPath)
 		name := strings.Split(fileName, ".")[0]
-		snapshotPath = filepath.Join(paths, name+".jpeg")
+		snapshotPath = name + ".jpeg"
 	}
 
-	err = imaging.Save(img, snapshotPath)
+	err = imaging.Save(img, filepath.Join("./public", snapshotPath))
 	if err != nil {
 		log.Fatal("生成缩略图失败：", err)
 	}
