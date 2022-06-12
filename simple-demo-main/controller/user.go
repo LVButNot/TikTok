@@ -75,7 +75,7 @@ func Login(c *gin.Context) {
 	pas := md5.Sum([]byte(password))
 	pasmd5 := fmt.Sprintf("%X", pas)
 
-	//gorm的sql语句实现，等同于select * from user_info_tabs where username = ?
+	//gorm的sql语句实现
 	var user User
 	find := GLOBAL_DB.Where("name = ?", username).Find(&user)
 

@@ -34,6 +34,8 @@ func RelationAction(c *gin.Context) {
 			UserAId: user.Id,
 			UserBId: toUserId,
 		}
+
+		//开启数据库事务
 		GLOBAL_DB.Transaction(func(tx *gorm.DB) error {
 			// 创建关注关系
 			if err := tx.Create(&relation).Error; err != nil {
@@ -46,6 +48,7 @@ func RelationAction(c *gin.Context) {
 			// 返回 nil 提交事务
 			return nil
 		})
+
 		c.JSON(http.StatusOK, Response{
 			StatusCode: 0,
 			StatusMsg:  "关注成功",
